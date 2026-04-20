@@ -1,3 +1,9 @@
+## 1.0.0 (2026-04-20)
+
+### Features
+
+* initialize dota-agent-cli project ([46ccf32](https://github.com/ByteLandTechnology/dota-agent-cli/commit/46ccf3297eb9a981f6848512e0ba92c1083c53ba))
+
 ## 1.0.0 (2026-04-14)
 
 ### Features
