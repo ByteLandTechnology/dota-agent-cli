@@ -1,0 +1,14 @@
+## 1.0.0 (2026-04-14)
+
+### Features
+
+* add live match commands and adopt 6-platform release asset pack ([7a08c1c](https://github.com/ByteLandTechnology/dota-agent-cli/commit/7a08c1caf06cb8679e613d63b5c6c48869cecccb))
+* initial dota-agent-cli release ([f467c2e](https://github.com/ByteLandTechnology/dota-agent-cli/commit/f467c2e0070eac72261f342e82a3579402c4d8e0))
+
+# Changelog
+
+All notable changes to this project are recorded here by `semantic-release`.
+
+Version numbers, Git tags, GitHub Releases, npm publication, and changelog
+entries are maintained by the release workflow. Do not hand-edit release
+entries or manually bump package versions for production releases.

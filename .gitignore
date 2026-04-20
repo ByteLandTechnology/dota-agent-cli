@@ -1,0 +1,7 @@
+target/
+.work/
+.local/
+node_modules/
+.cli-forge/
+dist/
+npm/platforms/

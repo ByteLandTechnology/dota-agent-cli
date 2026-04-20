@@ -1,0 +1,72 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      recover-version:
+        description: "Re-release an existing version (e.g. 1.2.3) without semantic-release"
+        required: false
+        type: string
+      recover-run-id:
+        description: "Optional prior run ID to download build artifacts from"
+        required: false
+        type: string
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  release:
+    runs-on: macos-14
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Add Rust targets
+        run: |
+          rustup target add aarch64-apple-darwin \
+            x86_64-apple-darwin \
+            aarch64-unknown-linux-musl \
+            x86_64-unknown-linux-musl \
+            aarch64-pc-windows-gnullvm \
+            x86_64-pc-windows-gnullvm
+
+      - name: Setup cross-build toolchain
+        uses: ./.github/actions/setup-build-env
+
+      - name: Install devDependencies
+        run: npm ci
+
+      - name: Verify release config
+        run: node scripts/release/validate-config.mjs
+
+      - name: Recover — build and publish existing version
+        if: inputs.recover-version != ''
+        run: |
+          VERSION="${{ inputs.recover-version }}"
+          echo "Recovering version $VERSION"
+          node scripts/release/build-binaries.mjs "$VERSION"
+          node scripts/release/sync-platform-packages.mjs "$VERSION"
+          node scripts/release/publish-npm-packages.mjs "$VERSION"
+        env:
+          NODE_AUTH_TOKEN: ""
+
+      - name: Run semantic release
+        if: inputs.recover-version == ''
+        run: npx semantic-release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
