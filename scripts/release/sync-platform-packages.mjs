@@ -60,6 +60,7 @@ const distDir = path.join(rootDir, "dist");
 mkdirSync(platformsDir, { recursive: true });
 
 const optionalDeps = {};
+const repositoryUrl = "https://github.com/ByteLandTechnology/dota-agent-cli";
 
 for (const target of config.targets) {
   const pkgName = buildPlatformPackageName(config, target);
@@ -84,6 +85,7 @@ for (const target of config.targets) {
         ? `${target.os}-${target.cpu} (static) binary for ${cliName}`
         : `${target.os}-${target.cpu} binary for ${cliName}`,
     license: mainPkg.license ?? "UNLICENSED",
+    repository: { type: "git", url: repositoryUrl },
     os: [target.os],
     cpu: [target.cpu],
     bin: { [cliName]: `bin/${binaryBaseName}` },
@@ -109,6 +111,7 @@ for (const target of config.targets) {
 
 mainPkg.name = mainPackageName;
 mainPkg.version = version;
+mainPkg.repository = { type: "git", url: repositoryUrl };
 mainPkg.bin = { [cliName]: "bin/cli.js" };
 mainPkg.optionalDependencies = optionalDeps;
 writeFileSync(mainPkgPath, `${JSON.stringify(mainPkg, null, 2)}\n`, "utf8");

@@ -1057,6 +1057,15 @@ fn execute_match_recent(
 
     maybe_handle_daemon_routed_command(&runtime, routing, "match recent", format)?;
 
+    // Load hero entries for name resolution
+    let (hero_entries, _) = knowledge_entries_for_kind(
+        &runtime,
+        EntryKind::Hero,
+        SourceSelector::Auto,
+        args.freshness,
+    )
+    .map_err(|error| leaf_exit(error, format))?;
+
     let output = match_commands::fetch_recent_matches(
         &runtime,
         args.source,
@@ -1067,6 +1076,7 @@ fn execute_match_recent(
         args.sort,
         args.won,
         &effective_context.effective_values,
+        &hero_entries,
     )
     .map_err(|error| leaf_exit(error, format))?;
     write_stdout(&output, format)
@@ -1732,9 +1742,13 @@ fn knowledge_entries_for_kind(
     source: SourceSelector,
     freshness: FreshnessMode,
 ) -> std::result::Result<(Vec<KnowledgeEntry>, ResponseSourceMetadata), ErrorContext> {
-    let _ = kind;
     let dataset = load_live_entries(runtime, source, freshness)?;
-    Ok((dataset.entries, dataset.source))
+    let entries: Vec<KnowledgeEntry> = dataset
+        .entries
+        .into_iter()
+        .filter(|e| e.kind == kind)
+        .collect();
+    Ok((entries, dataset.source))
 }
 
 fn render_leaf_error(error: ErrorContext, format: Format) -> std::result::Result<(), AppExit> {

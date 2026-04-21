@@ -3,6 +3,7 @@
 use crate::DaemonLifecycleState;
 use anyhow::{Context, Result, anyhow};
 use directories::ProjectDirs;
+use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fs;
@@ -535,7 +536,12 @@ fn sync_daemon_runtime_artifacts(
 
     if let Some(auth_token_path) = &state.auth_token_path {
         let token_path = PathBuf::from(auth_token_path);
-        let token = format!("{}_{}", state.instance_id, state.updated_at);
+        // Generate a cryptographically secure random token using 32 random bytes,
+        // encoded as hex. This replaces the previous insecure instance_id+timestamp approach.
+        let mut rng = rand::rngs::OsRng;
+        let mut random_bytes = [0u8; 32];
+        rng.fill_bytes(&mut random_bytes);
+        let token = hex::encode(random_bytes);
         fs::write(&token_path, format!("{token}\n"))
             .with_context(|| format!("failed to write {}", token_path.display()))?;
     } else {

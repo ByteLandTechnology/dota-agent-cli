@@ -451,6 +451,16 @@ pub fn start_repl(format: Format, runtime: RuntimeLocations) -> Result<()> {
                         current_directory: None,
                     },
                 );
+                let hero_entries: Vec<_> = crate::providers::load_live_entries(
+                    &runtime,
+                    crate::providers::SourceSelector::Auto,
+                    crate::providers::FreshnessMode::Recent,
+                )
+                .map_err(|e| anyhow::anyhow!("{}", e.message()))?
+                .entries
+                .into_iter()
+                .filter(|e| e.kind == crate::encyclopedia::EntryKind::Hero)
+                .collect();
                 match crate::match_commands::fetch_recent_matches(
                     &runtime,
                     crate::providers::ProviderSourceSelector::Auto,
@@ -461,6 +471,7 @@ pub fn start_repl(format: Format, runtime: RuntimeLocations) -> Result<()> {
                     crate::match_commands::MatchSort::Recent,
                     false,
                     &effective_context.effective_values,
+                    &hero_entries,
                 ) {
                     Ok(output) => {
                         serialize_value(&mut stdout, &output, format)?;

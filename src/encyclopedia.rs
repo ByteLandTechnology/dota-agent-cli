@@ -578,3 +578,21 @@ fn parse_timestamp(value: &Option<String>) -> f64 {
         .and_then(|candidate| candidate.parse::<f64>().ok())
         .unwrap_or(f64::NEG_INFINITY)
 }
+
+pub fn find_hero_by_name(entries: &[KnowledgeEntry], name: &str) -> Option<u32> {
+    let normalized_name = normalize(name);
+    entries
+        .iter()
+        .filter(|entry| entry.kind == EntryKind::Hero)
+        .find(|entry| {
+            let entry_name = normalize(&entry.name);
+            entry_name == normalized_name
+                || normalize(&entry.slug) == normalized_name
+                || entry
+                    .aliases
+                    .iter()
+                    .any(|alias| normalize(alias) == normalized_name)
+        })
+        .and_then(|entry| entry.provider_id.as_ref())
+        .and_then(|id| id.parse::<u32>().ok())
+}

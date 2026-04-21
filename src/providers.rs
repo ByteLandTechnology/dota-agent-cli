@@ -275,12 +275,7 @@ pub fn load_live_entries(
                 )
                 .with_detail("provider", "stratz"))
             } else {
-                Err(ErrorContext::new(
-                    "provider.unsupported_surface",
-                    "STRATZ is configured, but this revision still resolves hero/item encyclopedia surfaces through OpenDota",
-                    "provider_routing",
-                )
-                .with_detail("provider", "stratz"))
+                load_stratz_entries(runtime, freshness)
             }
         }
     }
@@ -353,7 +348,66 @@ pub fn source_warm(
                 notes: Vec::new(),
             });
         }
-        ProviderSourceSelector::Stratz => {}
+        ProviderSourceSelector::Stratz => {
+            // Warm STRATZ encyclopedia data (heroes and items)
+            match load_stratz_entries(runtime, effective_freshness) {
+                Ok(dataset) => {
+                    let hero_count = dataset
+                        .entries
+                        .iter()
+                        .filter(|e| e.kind == EntryKind::Hero)
+                        .count();
+                    let item_count = dataset
+                        .entries
+                        .iter()
+                        .filter(|e| e.kind == EntryKind::Item)
+                        .count();
+                    results.push(WarmResult {
+                        provider: "stratz".to_string(),
+                        dataset: "hero_index".to_string(),
+                        status: dataset.source.cache_state.clone(),
+                        record_count: Some(hero_count),
+                        cache_path: Some(
+                            runtime
+                                .cache_dir
+                                .join("live-providers")
+                                .join("stratz-hero-stats.json")
+                                .display()
+                                .to_string(),
+                        ),
+                        fetched_at: dataset.source.fetched_at.clone(),
+                        notes: Vec::new(),
+                    });
+                    results.push(WarmResult {
+                        provider: "stratz".to_string(),
+                        dataset: "item_index".to_string(),
+                        status: dataset.source.cache_state.clone(),
+                        record_count: Some(item_count),
+                        cache_path: Some(
+                            runtime
+                                .cache_dir
+                                .join("live-providers")
+                                .join("stratz-items.json")
+                                .display()
+                                .to_string(),
+                        ),
+                        fetched_at: dataset.source.fetched_at.clone(),
+                        notes: Vec::new(),
+                    });
+                }
+                Err(e) => {
+                    results.push(WarmResult {
+                        provider: "stratz".to_string(),
+                        dataset: "encyclopedia".to_string(),
+                        status: "error".to_string(),
+                        record_count: None,
+                        cache_path: None,
+                        fetched_at: None,
+                        notes: vec![format!("STRATZ warming failed: {}", e.message())],
+                    });
+                }
+            }
+        }
     }
 
     if matches!(
@@ -1074,4 +1128,617 @@ pub(crate) fn now() -> u64 {
 
 pub(crate) fn now_string() -> String {
     now().to_string()
+}
+
+// ============================================================================
+// STRATZ GraphQL API Integration
+// ============================================================================
+
+const STRATZ_GRAPHQL_URL: &str = "https://api.stratz.com/graphql";
+
+fn stratz_url(path: &str) -> String {
+    let base =
+        std::env::var("STRATZ_API_BASE_URL").unwrap_or_else(|_| STRATZ_GRAPHQL_URL.to_string());
+    format!(
+        "{}/{}",
+        base.trim_end_matches('/'),
+        path.trim_start_matches('/')
+    )
+}
+
+fn stratz_client() -> std::result::Result<Client, ErrorContext> {
+    Client::builder()
+        .timeout(Duration::from_secs(30))
+        .build()
+        .map_err(|e| {
+            ErrorContext::new(
+                "provider.unreachable",
+                format!("failed to construct STRATZ client: {}", e),
+                "stratz_client",
+            )
+        })
+}
+
+fn stratz_fetch_json<T: DeserializeOwned>(
+    client: &Client,
+    query: &str,
+    variables: Option<BTreeMap<String, serde_json::Value>>,
+) -> std::result::Result<T, ErrorContext> {
+    let token = std::env::var("STRATZ_API_TOKEN").map_err(|_| {
+        ErrorContext::new(
+            "provider.auth_required",
+            "STRATZ API token not found in STRATZ_API_TOKEN",
+            "stratz_provider",
+        )
+    })?;
+
+    let mut body = BTreeMap::new();
+    body.insert(
+        "query".to_string(),
+        serde_json::Value::String(query.to_string()),
+    );
+    if let Some(vars) = variables {
+        body.insert(
+            "variables".to_string(),
+            serde_json::Value::Object(vars.into_iter().collect()),
+        );
+    }
+
+    let request = client
+        .post(stratz_url("graphql"))
+        .header("Authorization", format!("Bearer {token}"))
+        .header("Content-Type", "application/json")
+        .json(&body);
+
+    let response = request.send().map_err(|error| {
+        ErrorContext::new(
+            "provider.unreachable",
+            format!("failed to reach STRATZ: {error}"),
+            "stratz_http",
+        )
+        .with_detail("provider", "stratz")
+    })?;
+
+    let status = response.status();
+    if !status.is_success() {
+        return Err(http_status_error("stratz", STRATZ_GRAPHQL_URL, status));
+    }
+
+    #[derive(Deserialize)]
+    struct GraphQLResponse<T> {
+        data: Option<T>,
+        errors: Option<Vec<serde_json::Value>>,
+    }
+
+    let graphql_response: GraphQLResponse<T> = response.json().map_err(|error| {
+        ErrorContext::new(
+            "provider.decode_failed",
+            format!("failed to decode STRATZ response: {error}"),
+            "stratz_http",
+        )
+    })?;
+
+    if let Some(errors) = graphql_response.errors {
+        let error_msg = errors
+            .iter()
+            .filter_map(|e| e.get("message").and_then(|m| m.as_str()))
+            .collect::<Vec<_>>()
+            .join("; ");
+        return Err(ErrorContext::new(
+            "provider.graphql_error",
+            format!("STRATZ GraphQL error: {}", error_msg),
+            "stratz_graphql",
+        ));
+    }
+
+    graphql_response.data.ok_or_else(|| {
+        ErrorContext::new(
+            "provider.decode_failed",
+            "STRATZ response missing data field",
+            "stratz_graphql",
+        )
+    })
+}
+
+// STRATZ Hero stats response structure
+#[derive(Debug, Clone, Deserialize)]
+struct StratzHeroStatsResponse {
+    #[serde(rename = "heroes")]
+    heroes: Option<StratzHeroList>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct StratzHeroList {
+    #[serde(rename = "top")]
+    top: Option<Vec<StratzHero>>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+struct StratzHero {
+    #[serde(rename = "id")]
+    id: Option<u32>,
+    #[serde(rename = "name")]
+    name: Option<String>,
+    #[serde(rename = "displayName")]
+    display_name: Option<String>,
+    #[serde(rename = "primaryAttribute")]
+    primary_attribute: Option<String>,
+    #[serde(rename = "type")]
+    hero_type: Option<String>,
+    #[serde(rename = "attackType")]
+    attack_type: Option<String>,
+    #[serde(rename = "roles")]
+    roles: Option<Vec<String>>,
+    #[serde(rename = "stats")]
+    stats: Option<StratzHeroStats>,
+    #[serde(rename = "alias")]
+    alias: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+struct StratzHeroStats {
+    #[serde(rename = "proPick")]
+    pro_pick: Option<u64>,
+    #[serde(rename = "proWin")]
+    pro_win: Option<u64>,
+    #[serde(rename = "proBan")]
+    pro_ban: Option<u64>,
+    #[serde(rename = "1Pick")]
+    pick_1: Option<u64>,
+    #[serde(rename = "1Win")]
+    win_1: Option<u64>,
+    #[serde(rename = "2Pick")]
+    pick_2: Option<u64>,
+    #[serde(rename = "2Win")]
+    win_2: Option<u64>,
+    #[serde(rename = "3Pick")]
+    pick_3: Option<u64>,
+    #[serde(rename = "3Win")]
+    win_3: Option<u64>,
+    #[serde(rename = "4Pick")]
+    pick_4: Option<u64>,
+    #[serde(rename = "4Win")]
+    win_4: Option<u64>,
+    #[serde(rename = "5Pick")]
+    pick_5: Option<u64>,
+    #[serde(rename = "5Win")]
+    win_5: Option<u64>,
+    #[serde(rename = "6Pick")]
+    pick_6: Option<u64>,
+    #[serde(rename = "6Win")]
+    win_6: Option<u64>,
+    #[serde(rename = "7Pick")]
+    pick_7: Option<u64>,
+    #[serde(rename = "7Win")]
+    win_7: Option<u64>,
+    #[serde(rename = "8Pick")]
+    pick_8: Option<u64>,
+    #[serde(rename = "8Win")]
+    win_8: Option<u64>,
+    #[serde(rename = "turboPicks")]
+    turbo_picks: Option<u64>,
+    #[serde(rename = "turboWins")]
+    turbo_wins: Option<u64>,
+}
+
+fn stratz_load_hero_stats(client: &Client) -> std::result::Result<Vec<StratzHero>, ErrorContext> {
+    // STRATZ GraphQL query for hero stats
+    let query = r#"
+        query HeroStats {
+            heroes {
+                top {
+                    id
+                    name
+                    displayName
+                    primaryAttribute
+                    type
+                    attackType
+                    roles
+                    stats {
+                        proPick
+                        proWin
+                        proBan
+                        1Pick
+                        1Win
+                        2Pick
+                        2Win
+                        3Pick
+                        3Win
+                        4Pick
+                        4Win
+                        5Pick
+                        5Win
+                        6Pick
+                        6Win
+                        7Pick
+                        7Win
+                        8Pick
+                        8Win
+                        turboPicks
+                        turboWins
+                    }
+                    alias
+                }
+            }
+        }
+    "#;
+
+    let response: StratzHeroStatsResponse = stratz_fetch_json(client, query, None)?;
+    Ok(response.heroes.and_then(|h| h.top).unwrap_or_default())
+}
+
+// STRATZ Item constants response
+#[derive(Debug, Clone, Deserialize)]
+struct StratzItemResponse {
+    #[serde(rename = "items")]
+    items: Option<StratzItemList>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct StratzItemList {
+    #[serde(rename = "top")]
+    top: Option<Vec<StratzItem>>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+struct StratzItem {
+    #[serde(rename = "id")]
+    id: Option<u32>,
+    #[serde(rename = "name")]
+    name: Option<String>,
+    #[serde(rename = "displayName")]
+    display_name: Option<String>,
+    #[serde(rename = "qual")]
+    qual: Option<String>,
+    #[serde(rename = "cost")]
+    cost: Option<u32>,
+    #[serde(rename = "notes")]
+    notes: Option<String>,
+    #[serde(rename = "hint")]
+    hint: Option<Vec<String>>,
+    #[serde(rename = "components")]
+    components: Option<Vec<String>>,
+    #[serde(rename = "cooldown")]
+    cooldown: Option<f64>,
+    #[serde(rename = "manaCost")]
+    mana_cost: Option<u32>,
+    #[serde(rename = "lore")]
+    lore: Option<String>,
+}
+
+fn stratz_load_items(
+    client: &Client,
+) -> std::result::Result<BTreeMap<String, StratzItem>, ErrorContext> {
+    // STRATZ GraphQL query for items
+    let query = r#"
+        query Items {
+            items {
+                top {
+                    id
+                    name
+                    displayName
+                    qual
+                    cost
+                    notes
+                    hint
+                    components
+                    cooldown
+                    manaCost
+                    lore
+                }
+            }
+        }
+    "#;
+
+    let response: StratzItemResponse = stratz_fetch_json(client, query, None)?;
+    let items = response.items.and_then(|i| i.top).unwrap_or_default();
+    let mut map = BTreeMap::new();
+    for item in items {
+        if let Some(name) = &item.name {
+            map.insert(name.clone(), item);
+        }
+    }
+    Ok(map)
+}
+
+fn load_stratz_entries(
+    runtime: &RuntimeLocations,
+    freshness: FreshnessMode,
+) -> std::result::Result<ProviderDataset, ErrorContext> {
+    let cache_root = runtime.cache_dir.join("live-providers");
+    fs::create_dir_all(&cache_root).map_err(|error| {
+        ErrorContext::new(
+            "provider.cache_write_failed",
+            format!("failed to create cache directory: {error}"),
+            "stratz_cache",
+        )
+        .with_detail("cache_root", cache_root.display().to_string())
+    })?;
+
+    let client = stratz_client()?;
+    let heroes_cache_path = cache_root.join("stratz-hero-stats.json");
+    let items_cache_path = cache_root.join("stratz-items.json");
+
+    // Load or fetch heroes
+    let (heroes, heroes_cache_state, heroes_cache_age, heroes_fetched_at) =
+        stratz_load_or_cache(&heroes_cache_path, OPENDOTA_HERO_TTL_SEC, freshness, || {
+            stratz_load_hero_stats(&client)
+        })?;
+
+    // Load or fetch items
+    let (items, items_cache_state, items_cache_age, items_fetched_at) =
+        stratz_load_or_cache(&items_cache_path, OPENDOTA_ITEM_TTL_SEC, freshness, || {
+            stratz_load_items(&client)
+        })?;
+
+    let mut entries = Vec::new();
+
+    // Convert STRATZ heroes to KnowledgeEntry
+    for hero in &heroes {
+        if let (Some(id), Some(name)) = (
+            hero.id,
+            hero.display_name.clone().or_else(|| hero.name.clone()),
+        ) {
+            let short_name = name.trim_start_matches("npc_dota_hero_").replace('_', " ");
+            let stats = hero.stats.as_ref();
+
+            let popularity = stats.and_then(|s| s.pro_pick).map(|v| v as f64);
+            let win_rate = stats
+                .and_then(|s| s.pro_pick.and_then(|p| s.pro_win.map(|w| (p, w))))
+                .and_then(|(p, w)| (p > 0).then_some((w as f64 / p as f64) * 100.0));
+
+            let mut tags = hero.roles.clone().unwrap_or_default();
+            if let Some(attr) = &hero.primary_attribute {
+                tags.push(attr.to_uppercase());
+            }
+            if let Some(at) = &hero.attack_type {
+                tags.push(at.clone());
+            }
+
+            let mut overlay_attributes = BTreeMap::new();
+            if let Some(attr) = &hero.primary_attribute {
+                overlay_attributes.insert("primary_attr".to_string(), attr.clone());
+            }
+            if let Some(at) = &hero.attack_type {
+                overlay_attributes.insert("attack_type".to_string(), at.clone());
+            }
+            if let Some(stats) = stats {
+                overlay_attributes.insert(
+                    "pro_pick".to_string(),
+                    stats.pro_pick.unwrap_or(0).to_string(),
+                );
+            }
+
+            entries.push(KnowledgeEntry {
+                kind: EntryKind::Hero,
+                slug: slugify(&name),
+                name: name.clone(),
+                aliases: {
+                    let mut aliases = vec![short_name.clone()];
+                    if let Some(hero_alias) = &hero.alias {
+                        aliases.extend(hero_alias.clone());
+                    }
+                    aliases
+                },
+                summary: format!(
+                    "{} {} hero with roles {}",
+                    humanize_primary_attr(hero.primary_attribute.as_deref()),
+                    hero.attack_type
+                        .as_deref()
+                        .unwrap_or("unknown attack type")
+                        .to_ascii_lowercase(),
+                    hero.roles
+                        .as_ref()
+                        .map(|r| r.join(", "))
+                        .unwrap_or_else(|| "none listed".to_string())
+                ),
+                details: vec![
+                    format!(
+                        "Primary attribute: {}.",
+                        humanize_primary_attr(hero.primary_attribute.as_deref())
+                    ),
+                    format!(
+                        "Attack type: {}.",
+                        hero.attack_type.as_deref().unwrap_or("Unknown")
+                    ),
+                    format!(
+                        "Roles: {}.",
+                        hero.roles
+                            .as_ref()
+                            .map(|r| r.join(", "))
+                            .unwrap_or_else(|| "none listed".to_string())
+                    ),
+                ],
+                tags,
+                related: vec![],
+                provider: Some("stratz".to_string()),
+                provider_id: Some(id.to_string()),
+                popularity,
+                win_rate,
+                updated_at: heroes_fetched_at.clone(),
+                overlay: Some(EntryOverlay {
+                    bullets: vec![format!(
+                        "Pro pick: {}{}",
+                        stats.and_then(|s| s.pro_pick).unwrap_or(0),
+                        win_rate
+                            .map(|w| format!(" with {:.1}% win rate", w))
+                            .unwrap_or_default()
+                    )],
+                    popularity,
+                    win_rate,
+                    sample_size: stats.and_then(|s| s.pro_pick),
+                    attributes: overlay_attributes,
+                }),
+            });
+        }
+    }
+
+    // Convert STRATZ items to KnowledgeEntry
+    for (key, item) in &items {
+        let display_name = item
+            .display_name
+            .clone()
+            .unwrap_or_else(|| titleize_item_key(key));
+        let mut details = Vec::new();
+        if let Some(notes) = &item.notes {
+            details.push(notes.clone());
+        }
+        if let Some(hints) = &item.hint {
+            details.extend(hints.iter().take(2).cloned());
+        }
+        if details.is_empty() {
+            details
+                .push("STRATZ returned a structured item record without extra notes.".to_string());
+        }
+
+        let mut tags = Vec::new();
+        if let Some(quality) = &item.qual {
+            tags.push(quality.clone());
+        }
+        if let Some(cost) = item.cost {
+            if cost >= 4000 {
+                tags.push("late-game".to_string());
+            } else if cost <= 2000 {
+                tags.push("early-game".to_string());
+            }
+        }
+
+        let mut overlay_attributes = BTreeMap::new();
+        if let Some(cost) = item.cost {
+            overlay_attributes.insert("cost".to_string(), cost.to_string());
+        }
+        if let Some(quality) = &item.qual {
+            overlay_attributes.insert("quality".to_string(), quality.clone());
+        }
+        if let Some(cd) = item.cooldown {
+            overlay_attributes.insert("cooldown".to_string(), cd.to_string());
+        }
+        if let Some(mc) = item.mana_cost {
+            overlay_attributes.insert("mana_cost".to_string(), mc.to_string());
+        }
+
+        entries.push(KnowledgeEntry {
+            kind: EntryKind::Item,
+            slug: slugify(&display_name),
+            name: display_name.clone(),
+            aliases: vec![key.replace('_', " ")],
+            summary: format!(
+                "{} item{}",
+                item.qual.clone().unwrap_or_else(|| "utility".to_string()),
+                item.cost
+                    .map(|value| format!(" costing {value} gold"))
+                    .unwrap_or_default()
+            ),
+            details,
+            tags,
+            related: vec![],
+            provider: Some("stratz".to_string()),
+            provider_id: item.id.map(|v| v.to_string()),
+            popularity: None,
+            win_rate: None,
+            updated_at: items_fetched_at.clone(),
+            overlay: Some(EntryOverlay {
+                bullets: vec![
+                    item.cost
+                        .map(|value| format!("Cost: {value} gold"))
+                        .unwrap_or_else(|| "Cost unavailable".to_string()),
+                    item.cooldown
+                        .map(|value| format!("Cooldown: {value}s"))
+                        .unwrap_or_else(|| "Cooldown unavailable".to_string()),
+                ],
+                popularity: None,
+                win_rate: None,
+                sample_size: None,
+                attributes: overlay_attributes,
+            }),
+        });
+    }
+
+    let cache_state = combine_cache_states(&[&heroes_cache_state, &items_cache_state]);
+    let cache_age_sec = max_age(&[heroes_cache_age, items_cache_age]);
+    let fetched_at = latest_timestamp(&[heroes_fetched_at.clone(), items_fetched_at.clone()]);
+
+    Ok(ProviderDataset {
+        entries,
+        source: ResponseSourceMetadata {
+            requested_source: "stratz".to_string(),
+            resolved_sources: vec!["stratz".to_string()],
+            freshness: freshness.as_str().to_string(),
+            cache_state,
+            cache_age_sec,
+            live_data_used: heroes_cache_state == "live_fetch" || items_cache_state == "live_fetch",
+            fetched_at,
+            notes: vec!["Encyclopedia surfaces resolved via STRATZ GraphQL API.".to_string()],
+        },
+    })
+}
+
+fn stratz_load_or_cache<T>(
+    cache_path: &Path,
+    ttl_sec: u64,
+    freshness: FreshnessMode,
+    fetcher: impl FnOnce() -> std::result::Result<T, ErrorContext>,
+) -> std::result::Result<(T, String, Option<u64>, Option<String>), ErrorContext>
+where
+    T: DeserializeOwned + Serialize,
+{
+    if let Some(cached) = read_cache::<T>(cache_path).ok().flatten() {
+        let cache_age_sec = now().saturating_sub(cached.fetched_at);
+        let fresh = cache_age_sec <= ttl_sec;
+
+        match freshness {
+            FreshnessMode::CachedOk => {
+                return Ok((
+                    cached.value,
+                    if fresh {
+                        "fresh_cache".to_string()
+                    } else {
+                        "stale_cache".to_string()
+                    },
+                    Some(cache_age_sec),
+                    Some(cached.fetched_at.to_string()),
+                ));
+            }
+            FreshnessMode::Recent if fresh => {
+                return Ok((
+                    cached.value,
+                    "fresh_cache".to_string(),
+                    Some(cache_age_sec),
+                    Some(cached.fetched_at.to_string()),
+                ));
+            }
+            FreshnessMode::Live | FreshnessMode::Recent => {}
+        }
+    } else if freshness == FreshnessMode::CachedOk {
+        return Err(ErrorContext::new(
+            "provider.cache_miss",
+            "requested cached provider data is not available yet; run `dota-agent-cli source warm` first",
+            "provider_cache",
+        )
+        .with_detail("cache_path", cache_path.display().to_string()));
+    }
+
+    let value = fetcher()?;
+    let fetched_at = now();
+    let envelope = CacheEnvelope {
+        fetched_at,
+        expires_at: fetched_at + ttl_sec,
+        value: &value,
+    };
+    let serialized = serde_json::to_string_pretty(&envelope).map_err(|e| {
+        ErrorContext::new(
+            "provider.cache_write_failed",
+            format!("failed to encode cache: {}", e),
+            "stratz_cache",
+        )
+        .with_detail("cache_path", cache_path.display().to_string())
+    })?;
+    let _ = fs::write(cache_path, serialized); // Best effort
+
+    Ok((
+        value,
+        "live_fetch".to_string(),
+        Some(0),
+        Some(fetched_at.to_string()),
+    ))
 }

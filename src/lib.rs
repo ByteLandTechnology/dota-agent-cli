@@ -1,6 +1,8 @@
 //! Shared library for the dota-agent-cli encyclopedia skill.
 
 pub mod context;
+#[cfg(unix)]
+pub mod daemon;
 pub mod encyclopedia;
 pub mod help;
 pub mod match_commands;

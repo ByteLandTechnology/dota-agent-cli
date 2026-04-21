@@ -1022,7 +1022,7 @@ fn match_help() -> HelpDocument {
     doc.description = vec![
         "The match tree provides live match tracking, match detail lookups, and player session queries backed by live providers."
             .to_string(),
-        "OpenDota is the default provider for match surfaces. STRATZ match support is planned but not yet implemented."
+        "OpenDota is the default provider for match surfaces. STRATZ is also supported for match surfaces."
             .to_string(),
         daemon_routing_description(),
     ];
