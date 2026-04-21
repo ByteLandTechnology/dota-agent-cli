@@ -1,6 +1,6 @@
 {
   "name": "dota-agent-cli",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "description": "Live provider-backed Dota 2 knowledge and live-match CLI for agent-friendly hero, item, match state, and source lookups",
   "license": "UNLICENSED",
   "type": "module",
@@ -19,11 +19,15 @@
     "provenance": true
   },
   "optionalDependencies": {
-    "@cli-forge-bin/dota-agent-cli-darwin-arm64": "1.0.0",
-    "@cli-forge-bin/dota-agent-cli-darwin-x64": "1.0.0",
-    "@cli-forge-bin/dota-agent-cli-linux-arm64": "1.0.0",
-    "@cli-forge-bin/dota-agent-cli-linux-x64": "1.0.0",
-    "@cli-forge-bin/dota-agent-cli-win32-arm64": "1.0.0",
-    "@cli-forge-bin/dota-agent-cli-win32-x64": "1.0.0"
+    "@cli-forge-bin/dota-agent-cli-darwin-arm64": "2.0.0",
+    "@cli-forge-bin/dota-agent-cli-darwin-x64": "2.0.0",
+    "@cli-forge-bin/dota-agent-cli-linux-arm64": "2.0.0",
+    "@cli-forge-bin/dota-agent-cli-linux-x64": "2.0.0",
+    "@cli-forge-bin/dota-agent-cli-win32-arm64": "2.0.0",
+    "@cli-forge-bin/dota-agent-cli-win32-x64": "2.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ByteLandTechnology/dota-agent-cli"
   }
 }

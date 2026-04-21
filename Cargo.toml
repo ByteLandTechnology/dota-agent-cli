@@ -1,6 +1,6 @@
 [package]
 name = "dota-agent-cli"
-version = "1.0.0"
+version = "2.0.0"
 edition = "2024"
 description = "Live provider-backed Dota 2 knowledge and live-match CLI for agent-friendly hero, item, match state, and source lookups"
 
