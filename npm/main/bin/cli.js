@@ -10,7 +10,10 @@ const pkg = JSON.parse(
   readFileSync(path.join(here, "..", "package.json"), "utf8"),
 );
 
-const platformPackage = `${pkg.name}-${process.platform}-${process.arch}`;
+const platformSuffix = `-${process.platform}-${process.arch}`;
+const platformPackage = Object.keys(pkg.optionalDependencies || {}).find(
+  (name) => name.endsWith(platformSuffix),
+);
 const binEntries = Object.keys(pkg.bin || {});
 if (!binEntries.length) {
   console.error("package.json has no bin entry.");
@@ -21,6 +24,13 @@ const binaryName = `${cliName}${process.platform === "win32" ? ".exe" : ""}`;
 
 const require = createRequire(import.meta.url);
 let binaryPath;
+if (!platformPackage) {
+  console.error(
+    `Unsupported platform ${process.platform}-${process.arch}. ` +
+      `Run on a supported platform.`,
+  );
+  process.exit(1);
+}
 try {
   binaryPath = require.resolve(`${platformPackage}/bin/${binaryName}`);
 } catch {
