@@ -11,6 +11,21 @@
 ### Bug Fixes
 
 * remove [skip ci] from release commit message ([fbbcf57](https://github.com/ByteLandTechnology/dota-agent-cli/commit/fbbcf57f811fa1ef9bc057458ac4cc17c5a65b59))
+* resolve scoped platform package name in bin/cli.js wrapper ([d97cb66](https://github.com/ByteLandTechnology/dota-agent-cli/commit/d97cb66dbdebf81ed0bb31a8cfc2c48be5df7ff0))
+
+## [2.0.0](https://github.com/ByteLandTechnology/dota-agent-cli/compare/v1.0.0...v2.0.0) (2026-04-21)
+
+### ⚠ BREAKING CHANGES
+
+* daemon start/stop behavior changed
+
+### Features
+
+* implement STRATZ GraphQL API and daemon IPC server ([082469f](https://github.com/ByteLandTechnology/dota-agent-cli/commit/082469f473a971828d899dcb63611d7400f86a8e))
+
+### Bug Fixes
+
+* remove [skip ci] from release commit message ([fbbcf57](https://github.com/ByteLandTechnology/dota-agent-cli/commit/fbbcf57f811fa1ef9bc057458ac4cc17c5a65b59))
 
 ## 1.0.0 (2026-04-20)
 
